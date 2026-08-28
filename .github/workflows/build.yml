@@ -68,7 +68,7 @@ jobs:
           ls -la .spm-cache 2>/dev/null || true
 
       # ------------------------------------------------------------ iOS
-      - name: Build iOS (ad-hoc signed)
+      - name: Build iOS (unsigned)
         run: |
           set -o pipefail
           (
@@ -79,12 +79,9 @@ jobs:
                 -destination 'generic/platform=iOS' \
                 -derivedDataPath build-ios \
                 -clonedSourcePackagesDirPath .spm-cache \
-                CODE_SIGN_IDENTITY="-" \
+                CODE_SIGN_IDENTITY="" \
                 CODE_SIGNING_REQUIRED=NO \
-                CODE_SIGNING_ALLOWED=YES \
-                CODE_SIGN_STYLE=Manual \
-                DEVELOPMENT_TEAM="" \
-                PROVISIONING_PROFILE_SPECIFIER=""
+                CODE_SIGNING_ALLOWED=NO
 
           ) 2>&1 | tee /tmp/ios.log || {
             grep -E 'error:' /tmp/ios.log | sort -u | head -12 | while IFS= read -r l; do
@@ -102,10 +99,20 @@ jobs:
           APP="build-ios/Build/Products/Release-iphoneos/EasynewsPlayer.app"
           test -d "$APP" || { echo "::error::App bundle not found at $APP"; exit 1; }
 
-          # Ad-hoc sign frameworks before the app that embeds them. AltStore
-          # replaces these signatures; it cannot create the slot itself.
-          codesign --force --sign - --timestamp=none "$APP/Frameworks/VLCKit.framework"
-          codesign --force --sign - --timestamp=none "$APP"
+          # xcodebuild will not ad-hoc sign against the iOS SDK, so do it here.
+          # codesign has no such restriction and adds the LC_CODE_SIGNATURE
+          # slot that AltStore/Sideloadly later overwrite with a real identity.
+          # Nested code must be signed before the bundle that contains it.
+          codesign --force --sign - --timestamp=none \
+            "$APP/Frameworks/VLCKit.framework/VLCKit" || {
+              echo "::error::Failed to ad-hoc sign VLCKit"; exit 1; }
+          codesign --force --sign - --timestamp=none \
+            "$APP/Frameworks/VLCKit.framework" || {
+              echo "::error::Failed to ad-hoc sign VLCKit.framework"; exit 1; }
+          codesign --force --sign - --timestamp=none "$APP" || {
+              echo "::error::Failed to ad-hoc sign the app bundle"; exit 1; }
+
+          codesign -dv "$APP" 2>&1 | head -5 || true
 
           python3 Scripts/check_signature.py "$APP"
 
