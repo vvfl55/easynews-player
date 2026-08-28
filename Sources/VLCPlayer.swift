@@ -22,6 +22,14 @@ final class VLCPlayerController: ObservableObject {
     @Published var elapsedText = "--:--"
     @Published var remainingText = "--:--"
     @Published var isBuffering = true
+    @Published var audioTracks: [TrackInfo] = []
+    @Published var subtitleTracks: [TrackInfo] = []
+
+    struct TrackInfo: Identifiable, Hashable {
+        let id: String
+        let name: String
+        let isSelected: Bool
+    }
 
     /// Set while the user drags the scrubber so polling doesn't fight the gesture.
     var isScrubbing = false
@@ -43,6 +51,36 @@ final class VLCPlayerController: ObservableObject {
 
     func attach(to view: PlatformView) {
         player.drawable = view
+    }
+
+    // MARK: - Tracks
+
+    /// Tracks only exist once VLC has parsed the container, so this is polled
+    /// alongside playback state rather than read once at load.
+    private func refreshTracks() {
+        audioTracks = player.audioTracks.map {
+            TrackInfo(id: $0.trackId, name: $0.trackName, isSelected: $0.isSelected)
+        }
+        subtitleTracks = player.textTracks.map {
+            TrackInfo(id: $0.trackId, name: $0.trackName, isSelected: $0.isSelected)
+        }
+    }
+
+    func selectAudioTrack(id: String) {
+        guard let track = player.audioTracks.first(where: { $0.trackId == id }) else { return }
+        player.deselectAllAudioTracks()
+        track.isSelected = true
+        refreshTracks()
+    }
+
+    /// Passing nil turns subtitles off.
+    func selectSubtitleTrack(id: String?) {
+        if let id, let track = player.textTracks.first(where: { $0.trackId == id }) {
+            player.selectTextTracks([track])
+        } else {
+            player.deselectAllTextTracks()
+        }
+        refreshTracks()
     }
 
     func load(url: URL, username: String, password: String) {
@@ -119,6 +157,8 @@ final class VLCPlayerController: ObservableObject {
         if isBuffering && Float(player.position) > 0 {
             isBuffering = false
         }
+
+        refreshTracks()
     }
 }
 
@@ -134,17 +174,29 @@ struct VLCVideoSurface {
     let controller: VLCPlayerController
 
     private func makeSurface() -> PlatformView {
-        let view = PlatformView()
+        let view = PassthroughVideoView()
         #if os(macOS)
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.black.cgColor
         #else
         view.backgroundColor = .black
+        view.isUserInteractionEnabled = false
         #endif
         controller.attach(to: view)
         return view
     }
 }
+
+/// VLC only needs somewhere to draw; it should never consume touches.
+/// Without this the video layer swallows every tap and the overlay controls
+/// can't be summoned back once they auto-hide.
+#if os(macOS)
+final class PassthroughVideoView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+#else
+final class PassthroughVideoView: UIView {}
+#endif
 
 #if os(iOS)
 extension VLCVideoSurface: UIViewRepresentable {
