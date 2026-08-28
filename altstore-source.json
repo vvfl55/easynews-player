@@ -1,0 +1,21 @@
+{
+  "name": "Easynews Player",
+  "identifier": "com.vvfl55.easynewsplayer.source",
+  "apps": [
+    {
+      "name": "Easynews Player",
+      "bundleIdentifier": "com.vvfl55.easynewsplayer",
+      "developerName": "vvfl55",
+      "localizedDescription": "Search Easynews and stream the results with VLC's decoder.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "date": "2026-08-28",
+          "downloadURL": "https://github.com/vvfl55/easynews-player/releases/download/v1.0.0/EasynewsPlayer.ipa",
+          "size": 19910013,
+          "minOSVersion": "16.0"
+        }
+      ]
+    }
+  ]
+}
