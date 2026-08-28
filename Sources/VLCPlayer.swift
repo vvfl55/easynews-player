@@ -125,6 +125,11 @@ final class VLCPlayerController: ObservableObject {
 // MARK: - SwiftUI bridge
 
 /// Hosts the VLC drawable surface. UIView on iOS, NSView on macOS.
+///
+/// @MainActor because it touches VLCPlayerController, which is main-actor
+/// isolated. UIViewRepresentable/NSViewRepresentable are themselves
+/// @MainActor, so the conformance in the extensions below still matches.
+@MainActor
 struct VLCVideoSurface {
     let controller: VLCPlayerController
 
