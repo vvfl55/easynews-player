@@ -41,6 +41,29 @@ Replace `OWNER/REPO` with yours. Every tagged release regenerates that file, Alt
 
 Free Apple ID: the app expires every 7 days and needs a refresh. Paid developer account ($99/yr): it lasts a year.
 
+## Year-long signing with a paid team
+
+AltStore only uses **Individual** paid Apple Developer teams. An
+**Organization** membership is not recognised, so AltStore silently falls back
+to the free Personal Team and signs for 7 days. Two ways around that:
+
+**Xcode (no AltStore needed).** Clone the repo on a Mac and run:
+
+```bash
+./Scripts/local-build.sh
+```
+
+That generates the project and opens it. Set Team to your organization team
+under Signing & Capabilities, plug in the device, press Run. The profile lasts
+a year. Updating means pulling and pressing Run again.
+
+**Sideloadly.** Download the IPA from Releases, open it in Sideloadly, sign in,
+and pick the organization team from the team dropdown rather than the personal
+one. Also a year, and no Xcode required — but no automatic update feed either.
+
+Note that certificates issued this way belong to the organization's account and
+are visible to its other admins.
+
 ## Installing on Mac
 
 Unzip and drag to Applications. The build is ad-hoc signed, so Gatekeeper will complain the first time — right-click the app and choose **Open**, or run:
