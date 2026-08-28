@@ -166,26 +166,39 @@ jobs:
           SIZE=$(stat -f%z EasynewsPlayer.ipa)
           DATE=$(date -u +%Y-%m-%d)
           DOWNLOAD="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/EasynewsPlayer.ipa"
+          ICON="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/icon.png"
 
           cat > altstore-source.json <<JSON
           {
             "name": "Easynews Player",
             "identifier": "com.vvfl55.easynewsplayer.source",
+            "subtitle": "Usenet search with a real codec stack",
+            "description": "Personal source for Easynews Player.",
+            "iconURL": "$ICON",
+            "tintColor": "#F09E3A",
+            "website": "https://github.com/$GITHUB_REPOSITORY",
             "apps": [
               {
                 "name": "Easynews Player",
                 "bundleIdentifier": "com.vvfl55.easynewsplayer",
                 "developerName": "$GITHUB_REPOSITORY_OWNER",
-                "localizedDescription": "Search Easynews and stream the results with VLC's decoder.",
+                "subtitle": "Search Easynews, play anything",
+                "localizedDescription": "Search Easynews and stream results with VLC's decoder. Plays MKV, HEVC, AV1, AC3, E-AC3 and DTS natively, none of which AVPlayer supports. Files stream over HTTPS range requests, so seeking works without downloading first.",
+                "iconURL": "$ICON",
+                "tintColor": "#F09E3A",
+                "category": "entertainment",
+                "screenshots": [],
                 "versions": [
                   {
                     "version": "$VERSION",
                     "date": "$DATE",
+                    "localizedDescription": "See the GitHub release notes for changes.",
                     "downloadURL": "$DOWNLOAD",
                     "size": $SIZE,
                     "minOSVersion": "16.0"
                   }
-                ]
+                ],
+                "appPermissions": { "entitlements": [], "privacy": {} }
               }
             ]
           }
