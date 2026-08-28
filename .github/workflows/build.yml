@@ -214,4 +214,10 @@ jobs:
           git add altstore-source.json
           git diff --staged --quiet && echo "No change" && exit 0
           git commit -m "Publish $VERSION to AltStore source [skip ci]"
-          git push origin main
+          # main can move while this job runs; rebase and retry rather than fail the release.
+          for attempt in 1 2 3; do
+            if git push origin main; then echo "pushed"; break; fi
+            echo "push rejected, rebasing (attempt $attempt)"
+            git pull --rebase origin main || exit 1
+            sleep 3
+          done
