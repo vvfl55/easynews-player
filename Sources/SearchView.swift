@@ -12,24 +12,34 @@ struct SearchView: View {
                 .onSubmit(of: .search) { state.search() }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            state.showingSettings = true
+                        Menu {
+                            Picker("Sort", selection: $state.sort) {
+                                ForEach(SortOption.allCases) { option in
+                                    Label(option.label, systemImage: option.systemImage)
+                                        .tag(option)
+                                }
+                            }
+                            Divider()
+                            Button {
+                                state.showingSettings = true
+                            } label: {
+                                Label("Account", systemImage: "person.crop.circle")
+                            }
                         } label: {
-                            Label("Account", systemImage: "person.crop.circle")
+                            Label("Options", systemImage: "ellipsis.circle")
                         }
+                        .accessibilityLabel("Options")
                     }
                 }
         }
         .sheet(isPresented: $state.showingSettings) {
-            SettingsView()
-                .environmentObject(state)
+            SettingsView().environmentObject(state)
         }
         .sheet(item: $inspecting) { file in
             RawJSONView(file: file)
         }
         .fullScreenCoverCompat(item: $state.playing) { request in
-            PlayerScreen(request: request)
-                .environmentObject(state)
+            PlayerScreen(request: request).environmentObject(state)
         }
     }
 
@@ -45,29 +55,111 @@ struct SearchView: View {
                 message: "Add your Easynews username and password to start searching."
             )
         } else if state.results.isEmpty {
+            idleState
+        } else {
+            resultsList
+        }
+    }
+
+    /// Before any search, offer recent terms rather than a bare empty screen.
+    @ViewBuilder
+    private var idleState: some View {
+        if state.history.isEmpty || state.errorMessage != nil {
             EmptyStateView(
                 icon: state.errorMessage == nil ? "magnifyingglass" : "exclamationmark.triangle",
                 title: state.errorMessage == nil ? "Search Usenet" : "Nothing found",
                 message: state.errorMessage ?? "Results stream directly — no download step."
             )
         } else {
-            List(state.results) { file in
+            List {
+                Section {
+                    ForEach(state.history, id: \.self) { term in
+                        Button {
+                            state.searchAgain(term)
+                        } label: {
+                            Label(term, systemImage: "clock.arrow.circlepath")
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                } header: {
+                    Text("Recent searches")
+                } footer: {
+                    Button("Clear", role: .destructive) { state.clearHistory() }
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    private var resultsList: some View {
+        List {
+            ForEach(state.results) { file in
                 ResultRow(file: file)
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        Task { await state.play(file) }
-                    }
-                    .contextMenu {
-                        Button("Inspect raw JSON") { inspecting = file }
-                    }
+                    .onTapGesture { Task { await state.play(file) } }
+                    .onAppear { state.loadMoreIfNeeded(currentItem: file) }
+                    .contextMenu { rowMenu(for: file) }
             }
-            .listStyle(.plain)
+
+            if state.isLoadingMore {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+            }
         }
+        .listStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func rowMenu(for file: EasynewsFile) -> some View {
+        Button {
+            Task { await state.play(file) }
+        } label: {
+            Label("Play", systemImage: "play.fill")
+        }
+
+        ForEach(ExternalPlayer.allCases) { target in
+            Button {
+                Task {
+                    if let url = await state.externalPlayerURL(for: file, scheme: target) {
+                        openExternal(url)
+                    }
+                }
+            } label: {
+                Label("Open in \(target.rawValue)", systemImage: "arrow.up.forward.app")
+            }
+        }
+
+        Divider()
+
+        Button {
+            inspecting = file
+        } label: {
+            Label("Inspect raw JSON", systemImage: "curlybraces")
+        }
+    }
+
+    private func openExternal(_ url: URL) {
+        #if os(iOS)
+        UIApplication.shared.open(url)
+        #else
+        NSWorkspace.shared.open(url)
+        #endif
     }
 }
 
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
+
 struct ResultRow: View {
     let file: EasynewsFile
+
+    private var resumeFraction: Float? { PlaybackStore.resumePosition(for: file.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -82,6 +174,9 @@ struct ResultRow: View {
                 if let runtime = file.runtime, !runtime.isEmpty {
                     Chip(text: runtime, tint: .gray)
                 }
+                if !file.subtitleLanguages.isEmpty {
+                    Chip(text: "CC", tint: .green)
+                }
             }
 
             if !file.audioLanguages.isEmpty {
@@ -89,8 +184,20 @@ struct ResultRow: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
+            // A thin progress bar is a quieter "you were here" than a badge.
+            if let fraction = resumeFraction {
+                ProgressView(value: Double(fraction))
+                    .progressViewStyle(.linear)
+                    .tint(.orange)
+                    .frame(height: 2)
+                    .padding(.top, 2)
+            }
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(file.baseName)
+        .accessibilityHint("Double tap to play")
     }
 }
 
@@ -167,9 +274,7 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        state.saveCredentials(
-                            Credentials(username: username, password: password)
-                        )
+                        state.saveCredentials(Credentials(username: username, password: password))
                         dismiss()
                     }
                     .disabled(username.isEmpty || password.isEmpty)

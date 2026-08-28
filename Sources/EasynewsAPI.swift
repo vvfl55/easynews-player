@@ -186,6 +186,50 @@ enum JSONValueBridge {
     }
 }
 
+// MARK: - Search options
+
+enum SortOption: String, CaseIterable, Identifiable {
+    case relevance
+    case newest
+    case largest
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .relevance: return "Relevance"
+        case .newest: return "Newest"
+        case .largest: return "Largest"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .relevance: return "sparkle.magnifyingglass"
+        case .newest: return "clock"
+        case .largest: return "arrow.up.arrow.down"
+        }
+    }
+
+    /// Easynews sort field for the primary sort key.
+    fileprivate var field: String {
+        switch self {
+        case .relevance: return "relevance"
+        case .newest: return "dtime"
+        case .largest: return "dsize"
+        }
+    }
+}
+
+struct SearchPage {
+    let files: [EasynewsFile]
+    let page: Int
+    let pageSize: Int
+
+    /// A full page suggests there is at least one more.
+    var hasMore: Bool { files.count >= pageSize }
+}
+
 // MARK: - Errors
 
 enum EasynewsError: LocalizedError {
@@ -233,7 +277,14 @@ actor EasynewsClient {
 
     private static let videoExtensions = "mkv,mp4,avi,m4v,mov,webm,ts,m2ts,mpg,mpeg,wmv,flv"
 
-    private func request(query: String, page: Int, credentials: Credentials) throws -> URLRequest {
+    static let pageSize = 250
+
+    private func request(
+        query: String,
+        page: Int,
+        sort: SortOption,
+        credentials: Credentials
+    ) throws -> URLRequest {
         guard !credentials.username.isEmpty, !credentials.password.isEmpty else {
             throw EasynewsError.notConfigured
         }
@@ -249,13 +300,13 @@ actor EasynewsClient {
             .init(name: "gx", value: "1"),
             .init(name: "pno", value: String(page)),
             .init(name: "sS", value: "3"),
-            .init(name: "s1", value: "relevance"),
+            .init(name: "s1", value: sort.field),
             .init(name: "s1d", value: "-"),
             .init(name: "s2", value: "dsize"),
             .init(name: "s2d", value: "-"),
             .init(name: "s3", value: "dtime"),
             .init(name: "s3d", value: "-"),
-            .init(name: "pby", value: "250"),
+            .init(name: "pby", value: String(Self.pageSize)),
             .init(name: "safeO", value: "0"),
             .init(name: "gps", value: query),
             .init(name: "sbj", value: query),
@@ -272,11 +323,16 @@ actor EasynewsClient {
         return req
     }
 
-    func search(query: String, page: Int = 1, credentials: Credentials) async throws -> [EasynewsFile] {
+    func search(
+        query: String,
+        page: Int = 1,
+        sort: SortOption = .relevance,
+        credentials: Credentials
+    ) async throws -> SearchPage {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        guard !trimmed.isEmpty else { return SearchPage(files: [], page: page, pageSize: Self.pageSize) }
 
-        let req = try request(query: trimmed, page: page, credentials: credentials)
+        let req = try request(query: trimmed, page: page, sort: sort, credentials: credentials)
         let (data, response) = try await session.data(for: req)
 
         if let http = response as? HTTPURLResponse {
@@ -308,14 +364,17 @@ actor EasynewsClient {
             if let msg = root["error"]?.stringValue ?? root["message"]?.stringValue {
                 throw EasynewsError.decoding(msg)
             }
-            return []
+            return SearchPage(files: [], page: page, pageSize: Self.pageSize)
         }
 
-        return rows.compactMap { $0.objectValue }.compactMap(EasynewsFile.from)
+        let files = rows.compactMap { $0.objectValue }.compactMap(EasynewsFile.from)
+        return SearchPage(files: files, page: page, pageSize: Self.pageSize)
     }
 
     /// Builds the direct stream URL. Easynews serves these over HTTPS with range
     /// support, so VLC can seek without downloading the whole file.
+    var hasRoutingInfo: Bool { !(downURL ?? "").isEmpty }
+
     func streamURL(for file: EasynewsFile, credentials: Credentials) -> URL? {
         guard var base = downURL, !base.isEmpty else { return nil }
 

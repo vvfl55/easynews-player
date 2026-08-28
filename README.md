@@ -59,11 +59,27 @@ Easynews returns objects keyed by numeric strings (`"0"` is the hash, `"10"` is 
 
 The search parameters live in `EasynewsClient.request(query:page:credentials:)`. It uses the V2 endpoint, which returns up to 250 results per page.
 
+## Features
+
+- Easynews search with relevance / newest / largest sorting, and pagination beyond the 250-result page cap
+- VLCKit playback: MKV, HEVC, AV1, AC3, E-AC3, DTS, embedded subtitles
+- Audio and subtitle track switching
+- Resume where you stopped, per file
+- Lock screen and Control Center controls, with background audio
+- Playback speed, double-tap to seek, swipe down to dismiss
+- Recent searches
+- Hand off to VLC or Infuse from a result's context menu
+- Raw-JSON inspector for debugging Easynews field changes
+
 ## Known gaps
 
-- **No audio/subtitle track picker yet.** VLCKit 4's track API differs from 3's, and I left it out so the first build goes green rather than failing on an API mismatch you can't debug without Xcode. Add it once you have a working IPA — `VLCMediaPlayer` exposes the tracks.
-- **No pagination.** One page, 250 results.
-- **Picture-in-Picture** is available in VLCKit 4 but not wired up.
+- **Picture-in-Picture** is not wired up. VLCKit 4 supports it, but it needs an
+  AVPictureInPictureController backed by a sample-buffer display layer, which is
+  a meaningful chunk of work.
+- **No AirPlay video.** VLC does not expose native AirPlay for arbitrary codecs.
+- **macOS has no keyboard shortcuts** yet (space to play/pause, arrows to seek).
+- **The Mac app does not self-update.** Adding Sparkle with an appcast pointing
+  at GitHub Releases would fix that.
 
 ## If the build fails
 

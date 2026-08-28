@@ -13,8 +13,10 @@ typealias PlatformView = NSView
 /// Owns the VLCMediaPlayer and publishes playback state to SwiftUI.
 ///
 /// State is polled on a timer rather than read from VLCMediaPlayerDelegate.
-/// The delegate method signatures changed between VLCKit 3 and 4, and polling
-/// four properties twice a second costs nothing while staying version-agnostic.
+/// The delegate signatures changed between VLCKit 3 and 4, and polling a
+/// handful of properties twice a second costs nothing while staying
+/// version-agnostic. Every published property is written only when it
+/// actually changes, so SwiftUI is not re-rendered on every tick.
 @MainActor
 final class VLCPlayerController: ObservableObject {
     @Published var isPlaying = false
@@ -22,6 +24,9 @@ final class VLCPlayerController: ObservableObject {
     @Published var elapsedText = "--:--"
     @Published var remainingText = "--:--"
     @Published var isBuffering = true
+    @Published var playbackError: String?
+    @Published var durationSeconds: Double = 0
+    @Published var rate: Float = 1.0
     @Published var audioTracks: [TrackInfo] = []
     @Published var subtitleTracks: [TrackInfo] = []
 
@@ -35,7 +40,12 @@ final class VLCPlayerController: ObservableObject {
     var isScrubbing = false
 
     let player = VLCMediaPlayer()
+    let nowPlaying = NowPlayingController()
+
     private var ticker: Timer?
+    private var pendingResume: Float?
+    private var trackSignature = ""
+    private var mediaTitle = ""
 
     init() {
         configureAudioSession()
@@ -43,7 +53,8 @@ final class VLCPlayerController: ObservableObject {
 
     private func configureAudioSession() {
         #if os(iOS)
-        // Without this, playback stops on silent-switch and can't continue in background.
+        // Without this, playback stops on the silent switch and cannot
+        // continue while the screen is locked.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
@@ -53,41 +64,16 @@ final class VLCPlayerController: ObservableObject {
         player.drawable = view
     }
 
-    // MARK: - Tracks
+    // MARK: - Loading
 
-    /// Tracks only exist once VLC has parsed the container, so this is polled
-    /// alongside playback state rather than read once at load.
-    private func refreshTracks() {
-        audioTracks = player.audioTracks.map {
-            TrackInfo(id: $0.trackId, name: $0.trackName, isSelected: $0.isSelected)
+    func load(url: URL, username: String, password: String, title: String, resumeAt: Float?) {
+        guard let media = VLCMedia(url: url) as VLCMedia? else {
+            playbackError = "Couldn't open that URL."
+            return
         }
-        subtitleTracks = player.textTracks.map {
-            TrackInfo(id: $0.trackId, name: $0.trackName, isSelected: $0.isSelected)
-        }
-    }
 
-    func selectAudioTrack(id: String) {
-        guard let track = player.audioTracks.first(where: { $0.trackId == id }) else { return }
-        player.deselectAllAudioTracks()
-        track.isSelected = true
-        refreshTracks()
-    }
-
-    /// Passing nil turns subtitles off.
-    func selectSubtitleTrack(id: String?) {
-        if let id, let track = player.textTracks.first(where: { $0.trackId == id }) {
-            player.selectTextTracks([track])
-        } else {
-            player.deselectAllTextTracks()
-        }
-        refreshTracks()
-    }
-
-    func load(url: URL, username: String, password: String) {
-        guard let media = VLCMedia(url: url) as VLCMedia? else { return }
-
-        // Generous caching: Usenet files stream from a CDN and stutter on the
-        // default 300ms buffer, especially over cellular.
+        // Usenet files stream from a CDN and stutter badly on VLC's default
+        // 300ms buffer, especially over cellular.
         media.addOption(":network-caching=5000")
         media.addOption(":file-caching=5000")
         media.addOption(":http-reconnect")
@@ -97,18 +83,33 @@ final class VLCPlayerController: ObservableObject {
             media.addOption(":http-pwd=\(password)")
         }
 
+        mediaTitle = title
+        pendingResume = resumeAt
+        playbackError = nil
+        isBuffering = true
+
         player.media = media
         player.play()
-        isBuffering = true
+
+        setScreenAwake(true)
+        wireRemoteCommands()
         startTicker()
     }
 
+    // MARK: - Transport
+
     func togglePlayPause() {
-        if player.isPlaying {
-            player.pause()
-        } else {
-            player.play()
-        }
+        if player.isPlaying { player.pause() } else { player.play() }
+        refresh()
+    }
+
+    func play() {
+        if !player.isPlaying { player.play() }
+        refresh()
+    }
+
+    func pause() {
+        if player.isPlaying { player.pause() }
         refresh()
     }
 
@@ -117,7 +118,12 @@ final class VLCPlayerController: ObservableObject {
         player.position = .init(clamped)
     }
 
-    /// Jump forward or back. VLCKit's jump methods take seconds as Int32.
+    func seek(toSeconds seconds: Double) {
+        guard durationSeconds > 0 else { return }
+        seek(to: Float(seconds / durationSeconds))
+    }
+
+    /// Jump forward or back. VLCKit 4 takes the interval as a double.
     func skip(seconds: Int32) {
         if seconds >= 0 {
             player.jumpForward(.init(seconds))
@@ -127,14 +133,71 @@ final class VLCPlayerController: ObservableObject {
         refresh()
     }
 
+    func setRate(_ newRate: Float) {
+        player.rate = newRate
+        rate = newRate
+    }
+
+    func retry() {
+        guard let media = player.media else { return }
+        playbackError = nil
+        isBuffering = true
+        player.media = media
+        player.play()
+    }
+
     func stop() {
         ticker?.invalidate()
         ticker = nil
         player.stop()
+        setScreenAwake(false)
+        nowPlaying.clear()
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false)
         #endif
     }
+
+    // MARK: - Tracks
+
+    func selectAudioTrack(id: String) {
+        guard let track = player.audioTracks.first(where: { $0.trackId == id }) else { return }
+        player.deselectAllAudioTracks()
+        track.isSelected = true
+        refreshTracks(force: true)
+    }
+
+    /// Passing nil turns subtitles off.
+    func selectSubtitleTrack(id: String?) {
+        if let id, let track = player.textTracks.first(where: { $0.trackId == id }) {
+            player.selectTextTracks([track])
+        } else {
+            player.deselectAllTextTracks()
+        }
+        refreshTracks(force: true)
+    }
+
+    /// Tracks only exist once VLC has parsed the container, so they are polled.
+    /// A signature check keeps this from republishing identical arrays twice a
+    /// second, which would rebuild the track menus continuously.
+    private func refreshTracks(force: Bool = false) {
+        let audio = player.audioTracks
+        let text = player.textTracks
+        let signature = (audio + text)
+            .map { "\($0.trackId):\($0.isSelected)" }
+            .joined(separator: "|")
+
+        guard force || signature != trackSignature else { return }
+        trackSignature = signature
+
+        audioTracks = audio.map {
+            TrackInfo(id: $0.trackId, name: $0.trackName, isSelected: $0.isSelected)
+        }
+        subtitleTracks = text.map {
+            TrackInfo(id: $0.trackId, name: $0.trackName, isSelected: $0.isSelected)
+        }
+    }
+
+    // MARK: - Polling
 
     private func startTicker() {
         ticker?.invalidate()
@@ -144,25 +207,84 @@ final class VLCPlayerController: ObservableObject {
     }
 
     private func refresh() {
-        isPlaying = player.isPlaying
+        let playing = player.isPlaying
+        if isPlaying != playing { isPlaying = playing }
 
-        if !isScrubbing {
-            position = Float(player.position)
+        let currentPosition = Float(player.position)
+        if !isScrubbing, abs(position - currentPosition) > 0.0001 {
+            position = currentPosition
         }
 
-        elapsedText = (player.time as VLCTime?)?.stringValue ?? "--:--"
-        remainingText = (player.remainingTime as VLCTime?)?.stringValue ?? "--:--"
+        let elapsed = (player.time as VLCTime?)?.stringValue ?? "--:--"
+        if elapsedText != elapsed { elapsedText = elapsed }
 
-        // Once the clock moves off zero we have real frames.
-        if isBuffering && Float(player.position) > 0 {
+        let remaining = (player.remainingTime as VLCTime?)?.stringValue ?? "--:--"
+        if remainingText != remaining { remainingText = remaining }
+
+        let lengthMs = player.media?.length.value?.doubleValue ?? 0
+        let seconds = lengthMs / 1000
+        if seconds > 0, abs(durationSeconds - seconds) > 0.5 { durationSeconds = seconds }
+
+        // Once the clock moves off zero there are real frames on screen.
+        if isBuffering && currentPosition > 0 { isBuffering = false }
+
+        // Seek to the saved position only after playback has genuinely begun;
+        // seeking during opening is ignored by VLC.
+        if let resume = pendingResume, currentPosition > 0 {
+            pendingResume = nil
+            seek(to: resume)
+        }
+
+        if player.state == .error, playbackError == nil {
+            playbackError = "Playback failed. The file may be incomplete, or your Easynews session may have expired."
             isBuffering = false
         }
 
         refreshTracks()
+        updateNowPlaying()
+    }
+
+    // MARK: - System integration
+
+    private func wireRemoteCommands() {
+        nowPlaying.wire(
+            play: { [weak self] in self?.togglePlayPause() },
+            pause: { [weak self] in self?.pause() },
+            skip: { [weak self] delta in self?.skip(seconds: Int32(delta)) },
+            seek: { [weak self] seconds in self?.seek(toSeconds: seconds) }
+        )
+    }
+
+    private func updateNowPlaying() {
+        nowPlaying.update(
+            title: mediaTitle,
+            elapsed: durationSeconds * Double(position),
+            duration: durationSeconds,
+            isPlaying: isPlaying,
+            rate: rate
+        )
+    }
+
+    /// A two-hour film should not be interrupted by the screen locking.
+    private func setScreenAwake(_ awake: Bool) {
+        #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = awake
+        #endif
     }
 }
 
 // MARK: - SwiftUI bridge
+
+/// VLC only needs somewhere to draw; it should never consume touches.
+/// Without this the video layer swallows every tap and the overlay controls
+/// cannot be summoned back once they auto-hide.
+#if os(macOS)
+final class PassthroughVideoView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+#else
+final class PassthroughVideoView: UIView {}
+#endif
 
 /// Hosts the VLC drawable surface. UIView on iOS, NSView on macOS.
 ///
@@ -186,17 +308,6 @@ struct VLCVideoSurface {
         return view
     }
 }
-
-/// VLC only needs somewhere to draw; it should never consume touches.
-/// Without this the video layer swallows every tap and the overlay controls
-/// can't be summoned back once they auto-hide.
-#if os(macOS)
-final class PassthroughVideoView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-#else
-final class PassthroughVideoView: UIView {}
-#endif
 
 #if os(iOS)
 extension VLCVideoSurface: UIViewRepresentable {
