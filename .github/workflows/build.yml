@@ -1,0 +1,164 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "altstore-source.json"
+      - "README.md"
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Derive version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.$GITHUB_RUN_NUMBER"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION"
+
+      # VLCKit ships as one universal XCFramework of roughly a gigabyte.
+      # Without this cache every run re-downloads it.
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .spm-cache
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Generate Xcode project
+        run: |
+          sed -i '' "s|MARKETING_VERSION: \"1.0.0\"|MARKETING_VERSION: \"${{ steps.version.outputs.version }}\"|" project.yml
+          sed -i '' "s|CURRENT_PROJECT_VERSION: \"1\"|CURRENT_PROJECT_VERSION: \"$GITHUB_RUN_NUMBER\"|" project.yml
+          mkdir -p Generated
+          xcodegen generate
+
+      # ------------------------------------------------------------ iOS
+      - name: Build iOS (unsigned)
+        run: |
+          xcodebuild build \
+            -project EasynewsPlayer.xcodeproj \
+            -scheme EasynewsPlayer-iOS \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-ios \
+            -clonedSourcePackagesDirPath .spm-cache \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA
+        run: |
+          APP="build-ios/Build/Products/Release-iphoneos/EasynewsPlayer.app"
+          test -d "$APP" || { echo "::error::App bundle not found at $APP"; exit 1; }
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry "EasynewsPlayer.ipa" Payload
+          rm -rf Payload
+          ls -lh EasynewsPlayer.ipa
+
+      # ---------------------------------------------------------- macOS
+      - name: Build macOS (ad-hoc signed)
+        run: |
+          xcodebuild build \
+            -project EasynewsPlayer.xcodeproj \
+            -scheme EasynewsPlayer-macOS \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build-mac \
+            -clonedSourcePackagesDirPath .spm-cache \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual
+
+      - name: Zip macOS app
+        run: |
+          APP="build-mac/Build/Products/Release/EasynewsPlayer.app"
+          test -d "$APP" || { echo "::error::App bundle not found at $APP"; exit 1; }
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "EasynewsPlayer-macOS.zip"
+          ls -lh EasynewsPlayer-macOS.zip
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasynewsPlayer-${{ steps.version.outputs.version }}
+          path: |
+            EasynewsPlayer.ipa
+            EasynewsPlayer-macOS.zip
+
+      # -------------------------------------------------------- Release
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            EasynewsPlayer.ipa
+            EasynewsPlayer-macOS.zip
+          generate_release_notes: true
+
+      # AltStore polls this file, sees the new version, and offers a one-tap
+      # update. Point AltStore at:
+      #   https://raw.githubusercontent.com/OWNER/REPO/main/altstore-source.json
+      - name: Regenerate AltStore source
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          SIZE=$(stat -f%z EasynewsPlayer.ipa)
+          DATE=$(date -u +%Y-%m-%d)
+          DOWNLOAD="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/EasynewsPlayer.ipa"
+
+          cat > altstore-source.json <<JSON
+          {
+            "name": "Easynews Player",
+            "identifier": "com.vvfl55.easynewsplayer.source",
+            "apps": [
+              {
+                "name": "Easynews Player",
+                "bundleIdentifier": "com.vvfl55.easynewsplayer",
+                "developerName": "$GITHUB_REPOSITORY_OWNER",
+                "localizedDescription": "Search Easynews and stream the results with VLC's decoder.",
+                "versions": [
+                  {
+                    "version": "$VERSION",
+                    "date": "$DATE",
+                    "downloadURL": "$DOWNLOAD",
+                    "size": $SIZE,
+                    "minOSVersion": "16.0"
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+
+          cp altstore-source.json /tmp/source.json
+          git reset --hard HEAD
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          cp /tmp/source.json altstore-source.json
+          git add altstore-source.json
+          git diff --staged --quiet && echo "No change" && exit 0
+          git commit -m "Publish $VERSION to AltStore source [skip ci]"
+          git push origin main

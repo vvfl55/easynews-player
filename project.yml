@@ -1,0 +1,107 @@
+name: EasynewsPlayer
+
+options:
+  bundleIdPrefix: com.example
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+    macOS: "13.0"
+
+packages:
+  VLCKit:
+    url: https://code.videolan.org/videolan/VLCKit.git
+    exactVersion: 4.0.0-a22
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+
+targets:
+  # ---------------------------------------------------------------- iOS
+  EasynewsPlayer-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: VLCKit
+        product: VLCKit
+    settings:
+      base:
+        PRODUCT_NAME: EasynewsPlayer
+        PRODUCT_BUNDLE_IDENTIFIER: com.vvfl55.easynewsplayer
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # AltStore re-signs on device, so CI ships an unsigned binary.
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+    info:
+      path: Generated/Info-iOS.plist
+      properties:
+        CFBundleDisplayName: Easynews
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        ITSAppUsesNonExemptEncryption: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+  # -------------------------------------------------------------- macOS
+  EasynewsPlayer-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: VLCKit
+        product: VLCKit
+    settings:
+      base:
+        PRODUCT_NAME: EasynewsPlayer
+        PRODUCT_BUNDLE_IDENTIFIER: com.vvfl55.easynewsplayer
+        # Ad-hoc signature: Apple Silicon refuses to launch unsigned arm64 apps.
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: YES
+        CODE_SIGNING_ALLOWED: YES
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+    info:
+      path: Generated/Info-macOS.plist
+      properties:
+        CFBundleDisplayName: Easynews
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.video
+        NSHumanReadableCopyright: "Embeds VLCKit, licensed under LGPLv2.1."
+
+schemes:
+  EasynewsPlayer-iOS:
+    build:
+      targets:
+        EasynewsPlayer-iOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  EasynewsPlayer-macOS:
+    build:
+      targets:
+        EasynewsPlayer-macOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
