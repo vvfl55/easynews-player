@@ -19,11 +19,11 @@
       "screenshots": [],
       "versions": [
         {
-          "version": "1.1.0",
+          "version": "1.2.0",
           "date": "2026-08-28",
           "localizedDescription": "See the GitHub release notes for changes.",
-          "downloadURL": "https://github.com/vvfl55/easynews-player/releases/download/v1.1.0/EasynewsPlayer.ipa",
-          "size": 20594188,
+          "downloadURL": "https://github.com/vvfl55/easynews-player/releases/download/v1.2.0/EasynewsPlayer.ipa",
+          "size": 20672238,
           "minOSVersion": "16.0"
         }
       ],
