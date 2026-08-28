@@ -4,41 +4,68 @@ import Foundation
 /// you searched for. Both are tiny and disposable, so UserDefaults is the
 /// right tool; nothing here justifies a database.
 enum PlaybackStore {
-    private static let positionsKey = "playback.positions"
+    private static let positionsKey = "playback.positions.v2"
     private static let historyKey = "search.history"
     private static let maxHistory = 12
     private static let maxPositions = 300
 
+    /// Position plus when it was written. The timestamp exists purely so the
+    /// store can be pruned by recency; without it there is no way to tell an
+    /// old entry from a new one, since the keys are opaque Easynews hashes.
+    private struct Entry: Codable {
+        var position: Double
+        var updated: Double
+    }
+
     // MARK: - Resume
 
-    /// Stored as a 0...1 fraction keyed by the Easynews file hash. Using a
-    /// fraction rather than seconds means resume works without knowing the
-    /// duration, which VLC only reports after it has parsed the container.
+    private static func loadEntries() -> [String: Entry] {
+        guard let data = UserDefaults.standard.data(forKey: positionsKey),
+              let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
+        else { return [:] }
+        return decoded
+    }
+
+    private static func saveEntries(_ entries: [String: Entry]) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(data, forKey: positionsKey)
+    }
+
+    /// Stored as a 0...1 fraction. Using a fraction rather than seconds means
+    /// resume works without knowing the duration, which VLC only reports once
+    /// it has parsed the container.
     static func resumePosition(for fileID: String) -> Float? {
-        let all = (UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double]) ?? [:]
-        guard let stored = all[fileID], stored > 0.02, stored < 0.95 else { return nil }
-        return Float(stored)
+        guard let entry = loadEntries()[fileID],
+              entry.position > 0.02,
+              entry.position < 0.95
+        else { return nil }
+        return Float(entry.position)
     }
 
     static func saveResumePosition(_ position: Float, for fileID: String) {
-        var all = (UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double]) ?? [:]
+        var entries = loadEntries()
 
         // Barely started or essentially finished: forget it rather than
         // offering to resume 12 seconds in or during the credits.
         if position <= 0.02 || position >= 0.95 {
-            all.removeValue(forKey: fileID)
+            entries.removeValue(forKey: fileID)
         } else {
-            all[fileID] = Double(position)
+            entries[fileID] = Entry(
+                position: Double(position),
+                updated: Date().timeIntervalSince1970
+            )
         }
 
-        if all.count > maxPositions {
-            all = Dictionary(uniqueKeysWithValues: all.sorted { $0.key < $1.key }.suffix(maxPositions))
+        // Drop the least recently watched. Sorting by key here would evict
+        // arbitrary entries, since the keys are content hashes.
+        if entries.count > maxPositions {
+            let keep = entries
+                .sorted { $0.value.updated > $1.value.updated }
+                .prefix(maxPositions)
+            entries = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
         }
-        UserDefaults.standard.set(all, forKey: positionsKey)
-    }
 
-    static func hasResume(for fileID: String) -> Bool {
-        resumePosition(for: fileID) != nil
+        saveEntries(entries)
     }
 
     // MARK: - Search history

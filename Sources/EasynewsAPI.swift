@@ -373,8 +373,6 @@ actor EasynewsClient {
 
     /// Builds the direct stream URL. Easynews serves these over HTTPS with range
     /// support, so VLC can seek without downloading the whole file.
-    var hasRoutingInfo: Bool { !(downURL ?? "").isEmpty }
-
     func streamURL(for file: EasynewsFile, credentials: Credentials) -> URL? {
         guard var base = downURL, !base.isEmpty else { return nil }
 

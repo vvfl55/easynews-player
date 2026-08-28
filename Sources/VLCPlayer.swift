@@ -46,6 +46,8 @@ final class VLCPlayerController: ObservableObject {
     private var pendingResume: Float?
     private var trackSignature = ""
     private var mediaTitle = ""
+    private var lastNowPlayingPush = Date.distantPast
+    private var lastNowPlayingState = false
 
     init() {
         configureAudioSession()
@@ -256,6 +258,15 @@ final class VLCPlayerController: ObservableObject {
     }
 
     private func updateNowPlaying() {
+        // Writing nowPlayingInfo crosses a process boundary, so push on state
+        // changes and otherwise at most every two seconds rather than on
+        // every 0.5s tick.
+        let now = Date()
+        let stateChanged = lastNowPlayingState != isPlaying
+        guard stateChanged || now.timeIntervalSince(lastNowPlayingPush) >= 2 else { return }
+        lastNowPlayingPush = now
+        lastNowPlayingState = isPlaying
+
         nowPlaying.update(
             title: mediaTitle,
             elapsed: durationSeconds * Double(position),
