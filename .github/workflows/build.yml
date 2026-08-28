@@ -53,19 +53,46 @@ jobs:
           mkdir -p Generated
           xcodegen generate
 
+      - name: Resolve Swift packages
+        run: |
+          set -o pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project EasynewsPlayer.xcodeproj \
+            -clonedSourcePackagesDirPath .spm-cache 2>&1 | tee /tmp/resolve.log || {
+              tail -30 /tmp/resolve.log | while IFS= read -r l; do
+                printf '::error::RESOLVE %s\n' "${l:0:300}"
+              done
+              exit 1
+            }
+          echo "Resolved packages:"
+          ls -la .spm-cache 2>/dev/null || true
+
       # ------------------------------------------------------------ iOS
       - name: Build iOS (unsigned)
         run: |
-          xcodebuild build \
-            -project EasynewsPlayer.xcodeproj \
-            -scheme EasynewsPlayer-iOS \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build-ios \
-            -clonedSourcePackagesDirPath .spm-cache \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+          set -o pipefail
+          (
+              xcodebuild build \
+                -project EasynewsPlayer.xcodeproj \
+                -scheme EasynewsPlayer-iOS \
+                -configuration Release \
+                -destination 'generic/platform=iOS' \
+                -derivedDataPath build-ios \
+                -clonedSourcePackagesDirPath .spm-cache \
+                CODE_SIGN_IDENTITY="" \
+                CODE_SIGNING_REQUIRED=NO \
+                CODE_SIGNING_ALLOWED=NO
+
+          ) 2>&1 | tee /tmp/ios.log || {
+            grep -E 'error:' /tmp/ios.log | sort -u | head -12 | while IFS= read -r l; do
+              printf '::error::IOS %s\n' "${l:0:350}"
+            done
+            printf '::error::IOS ---- last 20 lines ----\n'
+            tail -20 /tmp/ios.log | while IFS= read -r l; do
+              printf '::error::IOS %s\n' "${l:0:250}"
+            done
+            exit 1
+          }
 
       - name: Package IPA
         run: |
@@ -80,15 +107,28 @@ jobs:
       # ---------------------------------------------------------- macOS
       - name: Build macOS (ad-hoc signed)
         run: |
-          xcodebuild build \
-            -project EasynewsPlayer.xcodeproj \
-            -scheme EasynewsPlayer-macOS \
-            -configuration Release \
-            -destination 'generic/platform=macOS' \
-            -derivedDataPath build-mac \
-            -clonedSourcePackagesDirPath .spm-cache \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGN_STYLE=Manual
+          set -o pipefail
+          (
+              xcodebuild build \
+                -project EasynewsPlayer.xcodeproj \
+                -scheme EasynewsPlayer-macOS \
+                -configuration Release \
+                -destination 'generic/platform=macOS' \
+                -derivedDataPath build-mac \
+                -clonedSourcePackagesDirPath .spm-cache \
+                CODE_SIGN_IDENTITY="-" \
+                CODE_SIGN_STYLE=Manual
+
+          ) 2>&1 | tee /tmp/mac.log || {
+            grep -E 'error:' /tmp/mac.log | sort -u | head -12 | while IFS= read -r l; do
+              printf '::error::MAC %s\n' "${l:0:350}"
+            done
+            printf '::error::MAC ---- last 20 lines ----\n'
+            tail -20 /tmp/mac.log | while IFS= read -r l; do
+              printf '::error::MAC %s\n' "${l:0:250}"
+            done
+            exit 1
+          }
 
       - name: Zip macOS app
         run: |
